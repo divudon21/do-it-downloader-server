@@ -18,7 +18,7 @@ TELEGRAM_TOKEN = "8946978771:AAHvEzam0danch62xK7SfI0_g1-ff0tiD0U"
 if not os.path.exists(DOWNLOAD_DIR):
     os.makedirs(DOWNLOAD_DIR)
 
-# Task Storage (Persistent during session)
+# Task Storage
 tasks = {}
 
 def progress_hook(d, task_id):
@@ -37,10 +37,12 @@ def progress_hook(d, task_id):
             "downloadedSize": d.get('_downloaded_bytes_str', '0 MB'),
         })
     elif d['status'] == 'finished':
+        filename = os.path.basename(d['filename'])
         tasks[task_id].update({
             "status": "finished",
             "progress": 100.0,
-            "downloadUrl": f"{BASE_URL}/files/{tasks[task_id].get('filename', 'file')}"
+            "filename": filename,
+            "downloadUrl": f"{BASE_URL}/files/{filename}"
         })
 
 def auto_delete(task_id, filepath):
@@ -48,8 +50,9 @@ def auto_delete(task_id, filepath):
     if os.path.exists(filepath):
         try: os.remove(filepath)
         except: pass
+    # Keep task metadata for history but remove downloadUrl if file is gone
     if task_id in tasks:
-        del tasks[task_id]
+        tasks[task_id]['downloadUrl'] = None
 
 def run_download(url, task_id, proxy=None):
     ydl_opts = {
@@ -70,6 +73,8 @@ def run_download(url, task_id, proxy=None):
             tasks[task_id].update({
                 "title": info.get('title', 'Unknown'),
                 "filename": filename,
+                "status": "finished",
+                "progress": 100.0,
                 "downloadUrl": f"{BASE_URL}/files/{filename}"
             })
             threading.Thread(target=auto_delete, args=(task_id, os.path.join(DOWNLOAD_DIR, filename))).start()
@@ -87,12 +92,12 @@ async def handle_telegram_message(update: Update, context: ContextTypes.DEFAULT_
     
     if text and (text.startswith("http://") or text.startswith("https://")):
         tasks[task_id] = {
-            "taskId": task_id, "status": "starting", "progress": 0.0,
+            "taskId": task_id, "status": "downloading", "progress": 0.0,
             "speed": "0 KB/s", "totalSize": "N/A", "downloadedSize": "0 MB",
-            "title": "Analyzing URL..."
+            "title": "Telegram Link..."
         }
         threading.Thread(target=run_download, args=(text, task_id)).start()
-        await update.message.reply_text(f"Download started! Track in Do It App.\nTask ID: {task_id}")
+        await update.message.reply_text(f"Download started! Track in app.\nID: {task_id}")
     
     elif update.message.document or update.message.video:
         file = await update.message.effective_attachment.get_file()
@@ -127,9 +132,9 @@ def download_api():
     proxy = data.get('proxy')
     task_id = str(uuid.uuid4())
     tasks[task_id] = {
-        "taskId": task_id, "status": "starting", "progress": 0.0,
+        "taskId": task_id, "status": "downloading", "progress": 0.0,
         "speed": "0 KB/s", "totalSize": "N/A", "downloadedSize": "0 MB",
-        "title": "Analyzing..."
+        "title": "Starting..."
     }
     threading.Thread(target=run_download, args=(url, task_id, proxy)).start()
     return jsonify({"status": "ok", "taskId": task_id})
