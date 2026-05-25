@@ -17,9 +17,14 @@ if not os.path.exists(DOWNLOAD_DIR):
 def progress_hook(d, task_id):
     if d['status'] == 'downloading':
         p = d.get('_percent_str', '0%').replace('%', '').strip()
+        try:
+            progress_val = float(p)
+        except:
+            progress_val = 0.0
+            
         progress_data[task_id].update({
             "status": "downloading",
-            "progress": float(p) if p else 0,
+            "progress": progress_val,
             "speed": d.get('_speed_str', '0 KB/s'),
             "totalSize": d.get('_total_bytes_str', d.get('_total_bytes_estimate_str', 'N/A')),
             "downloadedSize": d.get('_downloaded_bytes_str', '0 MB'),
@@ -27,7 +32,7 @@ def progress_hook(d, task_id):
         })
     elif d['status'] == 'finished':
         progress_data[task_id]['status'] = 'finished'
-        progress_data[task_id]['progress'] = 100
+        progress_data[task_id]['progress'] = 100.0
 
 def auto_delete(task_id, filepath):
     time.sleep(86400) # 24 Hours
@@ -36,7 +41,7 @@ def auto_delete(task_id, filepath):
     if task_id in progress_data:
         del progress_data[task_id]
 
-def run_download(url, task_id):
+def run_download(url, task_id, proxy=None):
     ydl_opts = {
         'format': 'best',
         'outtmpl': f'{DOWNLOAD_DIR}/%(title)s.%(ext)s',
@@ -47,6 +52,10 @@ def run_download(url, task_id):
         'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
     }
+    
+    if proxy:
+        ydl_opts['proxy'] = proxy
+
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
@@ -61,17 +70,19 @@ def run_download(url, task_id):
 def download():
     data = request.json
     url = data.get('url')
+    proxy = data.get('proxy')
+    
     task_id = str(uuid.uuid4())
     progress_data[task_id] = {
         "taskId": task_id,
         "status": "starting",
-        "progress": 0,
+        "progress": 0.0,
         "speed": "0 KB/s",
         "totalSize": "N/A",
         "downloadedSize": "0 MB",
         "title": "Initializing..."
     }
-    threading.Thread(target=run_download, args=(url, task_id)).start()
+    threading.Thread(target=run_download, args=(url, task_id, proxy)).start()
     return jsonify({"status": "ok", "taskId": task_id})
 
 @app.route('/progress/<task_id>', methods=['GET'])
