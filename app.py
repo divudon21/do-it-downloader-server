@@ -5,7 +5,7 @@ import uuid
 import yt_dlp
 import asyncio
 from flask import Flask, request, jsonify, send_from_directory
-from telegram import Bot, Update
+from telegram import Update
 from telegram.ext import Application, MessageHandler, CommandHandler, filters, ContextTypes
 
 app = Flask(__name__)
@@ -20,20 +20,8 @@ if not os.path.exists(DOWNLOAD_DIR):
 
 # Progress Storage
 progress_data = {}
-stop_flag = False
-
-# Free Proxy List
-FREE_PROXIES = [
-    "http://103.152.112.162:80",
-    "http://103.14.135.105:80",
-    "http://154.236.177.106:1994"
-]
 
 def progress_hook(d, task_id):
-    global stop_flag
-    if stop_flag:
-        raise Exception("Task stopped by user")
-        
     if d['status'] == 'downloading':
         p = d.get('_percent_str', '0%').replace('%', '').strip()
         try: progress_val = float(p)
@@ -50,7 +38,7 @@ def progress_hook(d, task_id):
         progress_data[task_id].update({
             "status": "finished",
             "progress": 100.0,
-            "downloadUrl": f"{BASE_URL}/files/{progress_data[task_id]['filename']}"
+            "downloadUrl": f"{BASE_URL}/files/{progress_data[task_id].get('filename', '')}"
         })
 
 def auto_delete(task_id, filepath):
@@ -63,10 +51,6 @@ def auto_delete(task_id, filepath):
     except: pass
 
 def run_download(url, task_id, proxy=None):
-    global stop_flag
-    # Use provided proxy or fallback to a free one if requested
-    active_proxy = proxy if proxy else (FREE_PROXIES[0] if url.startswith("http") else None)
-    
     ydl_opts = {
         'format': 'best',
         'outtmpl': f'{DOWNLOAD_DIR}/%(title)s.%(ext)s',
@@ -74,8 +58,8 @@ def run_download(url, task_id, proxy=None):
         'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
     }
-    if active_proxy:
-        ydl_opts['proxy'] = active_proxy
+    if proxy:
+        ydl_opts['proxy'] = proxy
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -104,25 +88,22 @@ async def handle_telegram_message(update: Update, context: ContextTypes.DEFAULT_
             "title": "Telegram Link..."
         }
         threading.Thread(target=run_download, args=(text, task_id)).start()
-        await update.message.reply_text(f"Download started! Task ID: {task_id}\nTrack in app or wait here.")
+        await update.message.reply_text(f"Download started! Task ID: {task_id}")
     
     elif update.message.document or update.message.video:
         file = await update.message.effective_attachment.get_file()
-        filename = update.message.effective_attachment.file_name or f"{uuid.uuid4()}.file"
+        filename = (update.message.document.file_name if update.message.document else None) or f"{uuid.uuid4()}.mp4"
         filepath = os.path.join(DOWNLOAD_DIR, filename)
         
         progress_data[task_id] = {
             "taskId": task_id, "status": "downloading", "progress": 0.0,
-            "speed": "Telegram internal", "totalSize": "N/A", "downloadedSize": "Processing",
+            "speed": "Telegram", "totalSize": "N/A", "downloadedSize": "Processing",
             "title": filename, "filename": filename
         }
         
         await file.download_to_drive(filepath)
-        progress_data[task_id]['status'] = 'finished'
-        progress_data[task_id]['progress'] = 100.0
-        progress_data[task_id]['downloadUrl'] = f"{BASE_URL}/files/{filename}"
-        
-        await update.message.reply_text(f"File saved to server!\nLink: {BASE_URL}/files/{filename}")
+        progress_data[task_id].update({"status": "finished", "progress": 100.0, "downloadUrl": f"{BASE_URL}/files/{filename}"})
+        await update.message.reply_text(f"File saved!\nLink: {BASE_URL}/files/{filename}")
         threading.Thread(target=auto_delete, args=(task_id, filepath)).start()
 
 def run_bot():
@@ -136,8 +117,6 @@ def run_bot():
 
 @app.route('/download', methods=['POST'])
 def download():
-    global stop_flag
-    stop_flag = False
     data = request.json
     url = data.get('url')
     proxy = data.get('proxy')
@@ -153,29 +132,6 @@ def download():
 @app.route('/tasks', methods=['GET'])
 def list_tasks():
     return jsonify(list(progress_data.values()))
-
-@app.route('/stop_all', methods=['POST'])
-def stop_all():
-    global stop_flag
-    stop_flag = True
-    return jsonify({"status": "stopping_all"})
-
-@app.route('/delete_all', methods=['DELETE'])
-def delete_all():
-    global progress_data
-    for task_id in list(progress_data.keys()):
-        filename = progress_data[task_id].get('filename')
-        if filename:
-            path = os.path.join(DOWNLOAD_DIR, filename)
-            if os.path.exists(path):
-                try: os.remove(path)
-                except: pass
-    progress_data.clear()
-    # Also clear directory just in case
-    for f in os.listdir(DOWNLOAD_DIR):
-        try: os.remove(os.path.join(DOWNLOAD_DIR, f))
-        except: pass
-    return jsonify({"status": "all_deleted"})
 
 @app.route('/progress/<task_id>', methods=['GET'])
 def get_progress(task_id):
