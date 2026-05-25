@@ -62,6 +62,9 @@ def run_download(url, task_id, proxy=None):
         'format': 'best',
         'outtmpl': f'{DOWNLOAD_DIR}/%(title)s.%(ext)s',
         'progress_hooks': [lambda d: progress_hook(d, task_id)],
+        'noplaylist': True,
+        'quiet': False,
+        'no_warnings': False,
         'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
     }
