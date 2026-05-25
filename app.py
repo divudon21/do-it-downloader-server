@@ -115,6 +115,7 @@ async def handle_telegram_message(update: Update, context: ContextTypes.DEFAULT_
 
 def run_bot():
     application = Application.builder().token(TELEGRAM_TOKEN).build()
+    application.add_handler(CommandHandler("start", start_command))
     application.add_handler(MessageHandler(filters.ALL, handle_telegram_message))
     # stop_signals=None is critical when running in a background thread
     application.run_polling(stop_signals=None)
