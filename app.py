@@ -50,19 +50,24 @@ def progress_hook(d, task_id):
 
 def auto_delete(task_id, filepath):
     time.sleep(86400) # 24 Hours
-    if os.path.exists(filepath):
-        os.remove(filepath)
-    if task_id in progress_data:
-        del progress_data[task_id]
+    try:
+        if os.path.exists(filepath):
+            os.remove(filepath)
+        if task_id in progress_data:
+            del progress_data[task_id]
+    except: pass
 
 def run_download(url, task_id, proxy=None):
-    active_proxy = proxy if proxy else (FREE_PROXIES[0] if url.startswith("http") else None)
+    active_proxy = proxy if proxy else None
     
     ydl_opts = {
         'format': 'best',
         'outtmpl': f'{DOWNLOAD_DIR}/%(title)s.%(ext)s',
         'progress_hooks': [lambda d: progress_hook(d, task_id)],
-        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'noplaylist': True,
+        'quiet': False,
+        'no_warnings': False,
+        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
         'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
     }
     if active_proxy:
@@ -94,12 +99,11 @@ async def handle_telegram_message(update: Update, context: ContextTypes.DEFAULT_
             "title": "Telegram Link..."
         }
         threading.Thread(target=run_download, args=(text, task_id)).start()
-        await update.message.reply_text(f"Download started! Task ID: {task_id}\nTrack in app.")
+        await update.message.reply_text(f"Download started! Task ID: {task_id}\nTrack in app or wait here.")
     
     elif update.message.document or update.message.video:
-        attachment = update.message.document or update.message.video
-        file = await context.bot.get_file(attachment.file_id)
-        filename = getattr(attachment, 'file_name', f"{uuid.uuid4()}.file")
+        file = await update.message.effective_attachment.get_file()
+        filename = update.message.effective_attachment.file_name or f"{uuid.uuid4()}.file"
         filepath = os.path.join(DOWNLOAD_DIR, filename)
         
         progress_data[task_id] = {
@@ -113,7 +117,7 @@ async def handle_telegram_message(update: Update, context: ContextTypes.DEFAULT_
         progress_data[task_id]['progress'] = 100.0
         progress_data[task_id]['downloadUrl'] = f"{BASE_URL}/files/{filename}"
         
-        await update.message.reply_text(f"File saved! Link: {BASE_URL}/files/{filename}")
+        await update.message.reply_text(f"File saved to server!\nLink: {BASE_URL}/files/{filename}")
         threading.Thread(target=auto_delete, args=(task_id, filepath)).start()
 
 def run_bot():
@@ -154,13 +158,15 @@ def delete_task(task_id):
         filename = progress_data[task_id].get('filename')
         if filename:
             path = os.path.join(DOWNLOAD_DIR, filename)
-            if os.path.exists(path): os.remove(path)
+            try:
+                if os.path.exists(path): os.remove(path)
+            except: pass
         del progress_data[task_id]
     return jsonify({"status": "deleted"})
 
 @app.route('/')
 def health():
-    return "Do It App Server is running."
+    return "Do It App Server is running with Telegram Bot."
 
 if __name__ == '__main__':
     threading.Thread(target=run_bot, daemon=True).start()
