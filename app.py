@@ -114,11 +114,10 @@ async def handle_telegram_message(update: Update, context: ContextTypes.DEFAULT_
         threading.Thread(target=auto_delete, args=(task_id, filepath)).start()
 
 def run_bot():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
     application = Application.builder().token(TELEGRAM_TOKEN).build()
     application.add_handler(MessageHandler(filters.ALL, handle_telegram_message))
-    application.run_polling()
+    # stop_signals=None is critical when running in a background thread
+    application.run_polling(stop_signals=None)
 
 @app.route('/download', methods=['POST'])
 def download():
