@@ -4,6 +4,7 @@ import time
 import uuid
 import yt_dlp
 import asyncio
+import subprocess
 from flask import Flask, request, jsonify, send_from_directory
 from telegram import Bot, Update
 from telegram.ext import Application, MessageHandler, CommandHandler, filters, ContextTypes
@@ -21,12 +22,17 @@ if not os.path.exists(DOWNLOAD_DIR):
 # Progress Storage
 progress_data = {}
 
-# Free Proxy List
-FREE_PROXIES = [
-    "http://103.152.112.162:80",
-    "http://103.14.135.105:80",
-    "http://154.236.177.106:1994"
-]
+def update_ytdlp():
+    try:
+        subprocess.run(["pip", "install", "-U", "yt-dlp"], check=True)
+        print("yt-dlp updated successfully")
+    except Exception as e:
+        print(f"Failed to update yt-dlp: {e}")
+
+def daily_update():
+    while True:
+        update_ytdlp()
+        time.sleep(86400) # 24 hours
 
 def progress_hook(d, task_id):
     if d['status'] == 'downloading':
@@ -45,33 +51,27 @@ def progress_hook(d, task_id):
         progress_data[task_id].update({
             "status": "finished",
             "progress": 100.0,
-            "downloadUrl": f"{BASE_URL}/files/{progress_data[task_id].get('filename', '')}"
+            "downloadUrl": f"{BASE_URL}/files/{progress_data[task_id]['filename']}"
         })
 
 def auto_delete(task_id, filepath):
     time.sleep(86400) # 24 Hours
-    try:
-        if os.path.exists(filepath):
-            os.remove(filepath)
-        if task_id in progress_data:
-            del progress_data[task_id]
-    except: pass
+    if os.path.exists(filepath):
+        try: os.remove(filepath)
+        except: pass
+    if task_id in progress_data:
+        del progress_data[task_id]
 
-def run_download(url, task_id, proxy=None):
-    active_proxy = proxy if proxy else None
-    
+def run_download(url, task_id, format_id=None, proxy=None):
     ydl_opts = {
-        'format': 'best',
+        'format': format_id if format_id else 'best',
         'outtmpl': f'{DOWNLOAD_DIR}/%(title)s.%(ext)s',
         'progress_hooks': [lambda d: progress_hook(d, task_id)],
-        'noplaylist': True,
-        'quiet': False,
-        'no_warnings': False,
-        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
     }
-    if active_proxy:
-        ydl_opts['proxy'] = active_proxy
+    if proxy:
+        ydl_opts['proxy'] = proxy
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -84,7 +84,7 @@ def run_download(url, task_id, proxy=None):
         progress_data[task_id]['status'] = 'error'
         progress_data[task_id]['message'] = str(e)
 
-# Telegram Bot Handlers
+# Telegram Handlers
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Jay Dwarkadhish 🌹")
 
@@ -99,7 +99,7 @@ async def handle_telegram_message(update: Update, context: ContextTypes.DEFAULT_
             "title": "Telegram Link..."
         }
         threading.Thread(target=run_download, args=(text, task_id)).start()
-        await update.message.reply_text(f"Download started! Task ID: {task_id}\nTrack in app or wait here.")
+        await update.message.reply_text(f"Download started! Task ID: {task_id}\nTrack in app.")
     
     elif update.message.document or update.message.video:
         file = await update.message.effective_attachment.get_file()
@@ -108,16 +108,15 @@ async def handle_telegram_message(update: Update, context: ContextTypes.DEFAULT_
         
         progress_data[task_id] = {
             "taskId": task_id, "status": "downloading", "progress": 0.0,
-            "speed": "Telegram internal", "totalSize": "N/A", "downloadedSize": "Processing",
+            "speed": "Telegram", "totalSize": "N/A", "downloadedSize": "Processing",
             "title": filename, "filename": filename
         }
-        
         await file.download_to_drive(filepath)
-        progress_data[task_id]['status'] = 'finished'
-        progress_data[task_id]['progress'] = 100.0
-        progress_data[task_id]['downloadUrl'] = f"{BASE_URL}/files/{filename}"
-        
-        await update.message.reply_text(f"File saved to server!\nLink: {BASE_URL}/files/{filename}")
+        progress_data[task_id].update({
+            "status": "finished", "progress": 100.0, 
+            "downloadUrl": f"{BASE_URL}/files/{filename}"
+        })
+        await update.message.reply_text(f"Saved!\nLink: {BASE_URL}/files/{filename}")
         threading.Thread(target=auto_delete, args=(task_id, filepath)).start()
 
 def run_bot():
@@ -126,31 +125,52 @@ def run_bot():
     application.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_telegram_message))
     application.run_polling(stop_signals=None)
 
+@app.route('/formats', methods=['GET'])
+def get_formats():
+    url = request.args.get('url')
+    if not url: return jsonify({"status": "error", "message": "No URL"})
+    
+    try:
+        with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
+            info = ydl.extract_info(url, download=False)
+            formats = []
+            for f in info.get('formats', []):
+                if f.get('vcodec') != 'none': # Only video formats
+                    formats.append({
+                        "formatId": f.get('format_id'),
+                        "extension": f.get('ext'),
+                        "resolution": f.get('resolution'),
+                        "note": f.get('format_note'),
+                        "filesize": f"{round(f.get('filesize', 0) / 1024 / 1024, 1)} MB" if f.get('filesize') else "Unknown"
+                    })
+            return jsonify({
+                "status": "ok",
+                "title": info.get('title'),
+                "formats": formats[::-1] # Newest/Highest first
+            })
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)})
+
 @app.route('/download', methods=['POST'])
 def download():
     data = request.json
     url = data.get('url')
+    format_id = data.get('format_id')
     proxy = data.get('proxy')
     task_id = str(uuid.uuid4())
     progress_data[task_id] = {
         "taskId": task_id, "status": "starting", "progress": 0.0,
         "speed": "0 KB/s", "totalSize": "N/A", "downloadedSize": "0 MB",
-        "title": "Initializing..."
+        "title": "Analyzing..."
     }
-    threading.Thread(target=run_download, args=(url, task_id, proxy)).start()
+    threading.Thread(target=run_download, args=(url, task_id, format_id, proxy)).start()
     return jsonify({"status": "ok", "taskId": task_id})
 
 @app.route('/tasks', methods=['GET'])
-def list_tasks():
-    return jsonify(list(progress_data.values()))
-
-@app.route('/progress/<task_id>', methods=['GET'])
-def get_progress(task_id):
-    return jsonify(progress_data.get(task_id, {"status": "not_found"}))
+def list_tasks(): return jsonify(list(progress_data.values()))
 
 @app.route('/files/<path:filename>')
-def serve_file(filename):
-    return send_from_directory(DOWNLOAD_DIR, filename)
+def serve_file(filename): return send_from_directory(DOWNLOAD_DIR, filename)
 
 @app.route('/delete/<task_id>', methods=['DELETE'])
 def delete_task(task_id):
@@ -158,17 +178,17 @@ def delete_task(task_id):
         filename = progress_data[task_id].get('filename')
         if filename:
             path = os.path.join(DOWNLOAD_DIR, filename)
-            try:
-                if os.path.exists(path): os.remove(path)
-            except: pass
+            if os.path.exists(path): 
+                try: os.remove(path)
+                except: pass
         del progress_data[task_id]
     return jsonify({"status": "deleted"})
 
 @app.route('/')
-def health():
-    return "Do It App Server is running with Telegram Bot."
+def health(): return "Do It App Server is running."
 
 if __name__ == '__main__':
+    threading.Thread(target=daily_update, daemon=True).start()
     threading.Thread(target=run_bot, daemon=True).start()
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
