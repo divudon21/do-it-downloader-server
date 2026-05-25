@@ -6,7 +6,7 @@ import yt_dlp
 import asyncio
 from flask import Flask, request, jsonify, send_from_directory
 from telegram import Bot, Update
-from telegram.ext import Application, MessageHandler, filters, ContextTypes
+from telegram.ext import Application, MessageHandler, CommandHandler, filters, ContextTypes
 
 app = Flask(__name__)
 
@@ -21,7 +21,7 @@ if not os.path.exists(DOWNLOAD_DIR):
 # Progress Storage
 progress_data = {}
 
-# Free Proxy List (Unreliable but included)
+# Free Proxy List
 FREE_PROXIES = [
     "http://103.152.112.162:80",
     "http://103.14.135.105:80",
@@ -56,7 +56,6 @@ def auto_delete(task_id, filepath):
         del progress_data[task_id]
 
 def run_download(url, task_id, proxy=None):
-    # Use provided proxy or fallback to a free one if requested
     active_proxy = proxy if proxy else (FREE_PROXIES[0] if url.startswith("http") else None)
     
     ydl_opts = {
@@ -81,6 +80,9 @@ def run_download(url, task_id, proxy=None):
         progress_data[task_id]['message'] = str(e)
 
 # Telegram Bot Handlers
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Jay Dwarkadhish 🌹")
+
 async def handle_telegram_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     task_id = str(uuid.uuid4())
@@ -116,8 +118,7 @@ async def handle_telegram_message(update: Update, context: ContextTypes.DEFAULT_
 def run_bot():
     application = Application.builder().token(TELEGRAM_TOKEN).build()
     application.add_handler(CommandHandler("start", start_command))
-    application.add_handler(MessageHandler(filters.ALL, handle_telegram_message))
-    # stop_signals=None is critical when running in a background thread
+    application.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_telegram_message))
     application.run_polling(stop_signals=None)
 
 @app.route('/download', methods=['POST'])
@@ -161,7 +162,6 @@ def health():
     return "Do It App Server is running with Telegram Bot."
 
 if __name__ == '__main__':
-    # Start Telegram Bot in background
     threading.Thread(target=run_bot, daemon=True).start()
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
