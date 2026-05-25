@@ -21,42 +21,60 @@ if not os.path.exists(DOWNLOAD_DIR):
 # Progress Storage
 progress_data = {}
 
-# Free Proxy List
+# Free Proxy List (Fallback)
 FREE_PROXIES = [
     "http://103.152.112.162:80",
-    "http://103.14.135.105:80",
-    "http://154.236.177.106:1994"
+    "http://103.14.135.105:80"
 ]
+
+def format_bytes(size):
+    # Convert bytes to human readable format
+    power = 2**10
+    n = 0
+    power_labels = {0 : '', 1: 'K', 2: 'M', 3: 'G', 4: 'T'}
+    while size > power:
+        size /= power
+        n += 1
+    return f"{size:.2f} {power_labels[n]}B"
 
 def progress_hook(d, task_id):
     if d['status'] == 'downloading':
         p = d.get('_percent_str', '0%').replace('%', '').strip()
         try: progress_val = float(p)
         except: progress_val = 0.0
+        
+        # Real speed and size calculation
+        speed = d.get('_speed_str', '0 KB/s')
+        total = d.get('_total_bytes_str', d.get('_total_bytes_estimate_str', 'N/A'))
+        downloaded = d.get('_downloaded_bytes_str', '0 MB')
             
         progress_data[task_id].update({
             "status": "downloading",
             "progress": progress_val,
-            "speed": d.get('_speed_str', '0 KB/s'),
-            "totalSize": d.get('_total_bytes_str', d.get('_total_bytes_estimate_str', 'N/A')),
-            "downloadedSize": d.get('_downloaded_bytes_str', '0 MB'),
+            "speed": speed,
+            "totalSize": total,
+            "downloadedSize": downloaded,
         })
     elif d['status'] == 'finished':
+        filename = os.path.basename(d['filename'])
         progress_data[task_id].update({
             "status": "finished",
             "progress": 100.0,
-            "downloadUrl": f"{BASE_URL}/files/{progress_data[task_id].get('filename', '')}"
+            "downloadUrl": f"{BASE_URL}/files/{filename}",
+            "filename": filename
         })
 
 def auto_delete(task_id, filepath):
     time.sleep(86400) # 24 Hours
     if os.path.exists(filepath):
-        os.remove(filepath)
+        try: os.remove(filepath)
+        except: pass
     if task_id in progress_data:
-        del progress_data[task_id]
+        try: del progress_data[task_id]
+        except: pass
 
 def run_download(url, task_id, proxy=None):
-    active_proxy = proxy if proxy else (FREE_PROXIES[0] if url.startswith("http") else None)
+    active_proxy = proxy if proxy else None
     
     ydl_opts = {
         'format': 'best',
@@ -94,7 +112,7 @@ async def handle_telegram_message(update: Update, context: ContextTypes.DEFAULT_
             "title": "Telegram Link..."
         }
         threading.Thread(target=run_download, args=(text, task_id)).start()
-        await update.message.reply_text(f"Download started! Task ID: {task_id}\nTrack in app or wait here.")
+        await update.message.reply_text(f"Download started! Track in Do It App.\nTask ID: {task_id}")
     
     elif update.message.document or update.message.video:
         file = await update.message.effective_attachment.get_file()
@@ -103,16 +121,18 @@ async def handle_telegram_message(update: Update, context: ContextTypes.DEFAULT_
         
         progress_data[task_id] = {
             "taskId": task_id, "status": "downloading", "progress": 0.0,
-            "speed": "Telegram internal", "totalSize": "N/A", "downloadedSize": "Processing",
+            "speed": "Internal", "totalSize": "N/A", "downloadedSize": "Saving...",
             "title": filename, "filename": filename
         }
         
         await file.download_to_drive(filepath)
-        progress_data[task_id]['status'] = 'finished'
-        progress_data[task_id]['progress'] = 100.0
-        progress_data[task_id]['downloadUrl'] = f"{BASE_URL}/files/{filename}"
+        progress_data[task_id].update({
+            "status": "finished",
+            "progress": 100.0,
+            "downloadUrl": f"{BASE_URL}/files/{filename}"
+        })
         
-        await update.message.reply_text(f"File saved to server!\nLink: {BASE_URL}/files/{filename}")
+        await update.message.reply_text(f"File saved!\nLink: {BASE_URL}/files/{filename}")
         threading.Thread(target=auto_delete, args=(task_id, filepath)).start()
 
 def run_bot():
@@ -153,13 +173,15 @@ def delete_task(task_id):
         filename = progress_data[task_id].get('filename')
         if filename:
             path = os.path.join(DOWNLOAD_DIR, filename)
-            if os.path.exists(path): os.remove(path)
+            if os.path.exists(path):
+                try: os.remove(path)
+                except: pass
         del progress_data[task_id]
     return jsonify({"status": "deleted"})
 
 @app.route('/')
 def health():
-    return "Do It App Server is running with Telegram Bot."
+    return "Do It App Server is running."
 
 if __name__ == '__main__':
     threading.Thread(target=run_bot, daemon=True).start()
